@@ -23,7 +23,7 @@ def get_past_today_posts():
     response = requests.post(url, headers=headers)
     if response.status_code != 200:
         print(f"Notion API 에러: {response.text}")
-        return None # 에러 발생 시 None 반환
+        return None
 
     pages = response.json().get("results", [])
     matched_posts = []
@@ -31,12 +31,13 @@ def get_past_today_posts():
     for page in pages:
         properties = page.get("properties", {})
         
-        # '이름', '제목', 'Name' 모두 대응하도록 수정
+        # 제목 속성 찾기
         title_prop = properties.get("이름") or properties.get("제목") or properties.get("Name") or {}
         title_title = title_prop.get("title", [])
         title = title_title[0].get("plain_text", "제목 없음") if title_title else "제목 없음"
         
-        date_prop = properties.get("작성일") or properties.get("Created time") or {}
+        # 날짜 속성 찾기
+        date_prop = properties.get("작성일") or properties.get("Created time") or properties.get("날짜") or {}
         
         date_str = None
         if date_prop.get("type") == "created_time":
@@ -48,17 +49,24 @@ def get_past_today_posts():
             continue
             
         try:
-            post_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(KST)
-        except Exception:
+            # ISO 날짜 형식 변환 (YYYY-MM-DD만 있는 경우 처리 추가)
+            if len(date_str) == 10:
+                post_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=KST)
+            else:
+                post_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(KST)
+        except Exception as e:
+            print(f"날짜 변환 에러 ({title}): {e}")
             continue
             
-        if post_date.year < current_year and post_date.strftime("%m-%d") == target_md:
+        # [핵심 수정] 월-일만 맞으면 일단 감지하도록 수정 (오늘 테스트용 글 포함)
+        if post_date.strftime("%m-%d") == target_md:
+            year_diff = current_year - post_date.year
             page_id = page.get("id").replace("-", "")
             notion_url = f"https://www.notion.so/{page_id}"
             
             matched_posts.append({
                 "title": title,
-                "year_diff": current_year - post_date.year,
+                "year_diff": year_diff,
                 "url": notion_url,
                 "date": post_date.strftime("%Y-%m-%d")
             })
@@ -72,12 +80,12 @@ def send_telegram_message(posts):
     if posts is None:
         text = "❌ 노션 데이터베이스 연결에 에러가 발생했습니다."
     elif not posts:
-        # 테스트용: 과거의 오늘 글이 없어도 시스템이 정상 작동 중임을 알림
-        text = f"📅 *{today_str}* 연동 테스트 성공!\n과거의 오늘 작성한 글이 데이터베이스에 없습니다."
+        text = f"📅 *{today_str}* 연동 테스트 성공!\n오늘 또는 과거의 오늘 작성한 글이 데이터베이스에 없습니다."
     else:
-        text = f"📜 *과거의 오늘 ({today_str}) 내가 쓴 글*\n\n"
+        text = f"📜 *오늘/과거의 오늘 ({today_str}) 내가 쓴 글*\n\n"
         for post in posts:
-            text += f"▪️ *{post['year_diff']}년 전 오늘* ({post['date']})\n"
+            label = "오늘 작성" if post['year_diff'] == 0 else f"{post['year_diff']}년 전 오늘"
+            text += f"▪️ *{label}* ({post['date']})\n"
             text += f"🔗 [{post['title']}]({post['url']})\n\n"
         
     telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
