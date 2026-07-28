@@ -20,12 +20,26 @@ def get_past_today_posts():
         "Content-Type": "application/json"
     }
     
-    response = requests.post(url, headers=headers)
-    if response.status_code != 200:
-        print(f"Notion API 에러: {response.text}")
-        return None
+    pages = []
+    has_more = True
+    start_cursor = None
 
-    pages = response.json().get("results", [])
+    # 데이터베이스 전체 페이지를 끝까지 순회해서 불러옴 (100개 제한 해제)
+    while has_more:
+        payload = {}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            print(f"Notion API 에러: {response.text}")
+            return None
+
+        data = response.json()
+        pages.extend(data.get("results", []))
+        has_more = data.get("has_more", False)
+        start_cursor = data.get("next_cursor")
+
     matched_posts = []
 
     for page in pages:
@@ -36,8 +50,8 @@ def get_past_today_posts():
         title_title = title_prop.get("title", [])
         title = title_title[0].get("plain_text", "제목 없음") if title_title else "제목 없음"
         
-        # 날짜 속성 찾기
-        date_prop = properties.get("작성일") or properties.get("Created time") or properties.get("날짜") or {}
+        # 날짜 속성 찾기 (작성일 / Date / Created time 등 모두 대응)
+        date_prop = properties.get("작성일") or properties.get("Created time") or properties.get("날짜") or properties.get("Date") or {}
         
         date_str = None
         if date_prop.get("type") == "created_time":
@@ -49,16 +63,15 @@ def get_past_today_posts():
             continue
             
         try:
-            # ISO 날짜 형식 변환 (YYYY-MM-DD만 있는 경우 처리 추가)
+            # ISO 날짜 형식 변환
             if len(date_str) == 10:
                 post_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=KST)
             else:
                 post_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).astimezone(KST)
         except Exception as e:
-            print(f"날짜 변환 에러 ({title}): {e}")
             continue
             
-        # [핵심 수정] 월-일만 맞으면 일단 감지하도록 수정 (오늘 테스트용 글 포함)
+        # 오늘 날짜(월-일)와 동일한 글 추출
         if post_date.strftime("%m-%d") == target_md:
             year_diff = current_year - post_date.year
             page_id = page.get("id").replace("-", "")
